@@ -274,6 +274,10 @@ striping-simulator/
 ├── CLAUDE.md
 ├── index.html
 ├── package.json
+├── public/                            — static assets served as-is (not bundled)
+│   └── sounds/
+│       ├── striping_simulator_engine_idle_loop.wav
+│       └── striping_simulator_paint_spray_loop.wav
 ├── src/
 │   ├── main.ts                        — bootstraps renderer, phase state machine, input, game loop
 │   ├── style.css                      — HUD overlay styling
@@ -298,7 +302,7 @@ striping-simulator/
 │   │   ├── yardScene.ts               — equipment yard scene, click-to-load truck
 │   │   └── jobSiteScene.ts            — job site scene, drives rig physics + paint + coverage each frame
 │   ├── engine/audio/
-│   │   └── rigAudio.ts                — RigAudio: procedurally synthesized engine hum + hitch lock/unlock clicks
+│   │   └── rigAudio.ts                — RigAudio: real engine + spray loop samples (public/sounds/) + synthesized hitch lock/unlock clicks
 │   └── ui/
 │       └── hud.ts                     — DOM overlay: phase instructions, Start Job button, completion bar
 └── reference images/
@@ -471,14 +475,53 @@ striping-simulator/
   Job" button's click handler in `main.ts`, so it piggybacks on that gesture
   for free. If audio ever moves earlier (e.g. yard-phase ambience) it needs
   its own deliberate gesture trigger (a click/keypress), not just "construct
-  it at page load." Sounds are synthesized procedurally via raw Web Audio
-  API nodes (oscillators, filters, a noise-burst buffer for the clicks) —
-  no imported audio files yet, consistent with every other asset in the
-  project being procedural. Verified the engine/click wiring by driving the
-  rig through a full lock → unlock → re-lock cycle and confirming
-  `AudioContext.state === 'running'` plus the exact click counts (0 while
-  straight, 1 unlock on turning, 1 lock on settling back), not just that the
-  code compiled.
+  it at page load."
+  - **The engine loop is a real recorded sample** (`public/sounds/`, fetched
+    + `decodeAudioData`'d, looped via `AudioBufferSourceNode.loop = true`),
+    not synthesized — the first departure from this project's otherwise
+    fully-procedural asset approach. Real audio assets belong in `public/`,
+    not an `src/` import: Vite serves `public/` as-is at the root URL path
+    without bundling or base64-inlining it into the JS, which matters for
+    audio specifically (an imported/bundled audio file would get inlined).
+    The fetch+decode is necessarily async, started from `start()`, but that's
+    fine — the user-gesture constraint above is specifically about the
+    `AudioContext`'s creation/unlock, not about when any individual sound
+    starts playing, so the async load can safely happen after the
+    synchronous construction. **Doesn't pitch-shift the sample with speed**
+    (only volume) — it's a single idle-loop recording, not a multi-RPM set,
+    so speeding up playback would sound like a chipmunk effect rather than a
+    revving engine. Non-fatal on load failure (caught, logged, game stays
+    fully playable) since nothing else depends on it.
+  - **The spray loop (also a real sample) is preloaded in `start()` but not
+    played until `startSpray()`/`stopSpray()`** — called from
+    `JobSiteScene.update()` on the `rig.nozzleOn` edge (the same
+    edge-detection pattern already used for the lock/unlock clicks, not a
+    third different pattern). Preloading up front avoids a delay on the
+    player's very first press of Space; since `AudioBufferSourceNode`s are
+    single-use and can't be restarted after `stop()`, `startSpray()` creates
+    a fresh one from the cached decoded `AudioBuffer` each time rather than
+    reusing a node. Both start and stop are immediate/hard (no fade), matching
+    the nozzle itself switching instantly, not trailing off. `startSpray()`
+    no-ops if a source is already playing, so naive repeated calls (e.g. if
+    a caller's edge-detection has a bug and fires every frame while held)
+    can't stack multiple overlapping copies of the loop — verified this
+    explicitly: held Space across many frames and confirmed exactly one
+    start, not one per frame, then a separate press/release cycle correctly
+    produced exactly one more start and one more stop.
+  - The lock/unlock clicks are still synthesized procedurally via raw Web
+    Audio API nodes (a noise-burst buffer, bandpass-filtered) — a one-off
+    mechanical click is easy to synthesize convincingly and didn't need a
+    recorded asset. Don't assume everything in `RigAudio` is one approach or
+    the other; check which per-sound.
+  - Verified the engine sample genuinely loads and plays (not just that the
+    fetch didn't error): confirmed `AudioContext.state === 'running'` and
+    the decoded buffer's duration matched what the WAV file's raw byte size
+    implies for its format (16-bit mono PCM @ 32kHz) — an independent
+    cross-check that the decode produced the right data, not just that it
+    didn't throw. Separately verified the lock/unlock click wiring by
+    driving the rig through a full lock → unlock → re-lock cycle and
+    confirming the exact click counts (0 while straight, 1 unlock on
+    turning, 1 lock on settling back).
 
 ## Future: drive-to-job-site phase (design notes only — not implemented)
 

@@ -66,6 +66,7 @@ export class JobSiteScene {
   private readonly groundDepthFt: number;
   private readonly audio: RigAudio;
   private wasLocked: boolean;
+  private wasSpraying = false;
 
   constructor(job: JobDef, aspect: number) {
     const footprint = lotFootprint(job.lot);
@@ -188,6 +189,12 @@ export class JobSiteScene {
       this.wasLocked = this.rig.locked;
     }
     this.audio.setEngineLevel(Math.abs(this.rig.speedFtPerSec) / RIG_SPEC.maxForwardSpeedFtPerSec);
+
+    if (this.rig.nozzleOn !== this.wasSpraying) {
+      if (this.rig.nozzleOn) this.audio.startSpray();
+      else this.audio.stopSpray();
+      this.wasSpraying = this.rig.nozzleOn;
+    }
 
     if (this.rig.nozzleOn) {
       const nozzlePos = nozzleWorldPosition(this.rig);
