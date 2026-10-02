@@ -15,11 +15,19 @@
  * trail the striper through the hitch pivot, via the same kinematics used
  * for a car towing a trailer (just with the labels swapped: the steered,
  * lead unit is physically in front here, same as a real tractor-trailer,
- * but it isn't the one providing propulsion). The upshot, which is the
- * whole point: drive straight for a bit and the buggy's heading converges
- * back to match the striper's (no explicit "lock" needed, it's the stable
- * equilibrium of the equation below); turn, and the two visibly articulate
- * apart around the hitch point like a real towed trailer swinging out.
+ * but it isn't the one providing propulsion).
+ *
+ * On top of that trailing physics sits an explicit LOCK state
+ * (`RigState.locked`): while the player holds no steer input and the two
+ * units are aligned, they're pinned perfectly straight (buggyHeading forced
+ * to equal striperHeading exactly) rather than left to the trailer
+ * equation's asymptotic convergence, which technically never reaches exact
+ * zero and could show a faint residual wobble. Any steer input immediately
+ * breaks the lock and hands control back to the trailer equation, which
+ * re-engages the lock on its own once it has settled back within
+ * `RIG_SPEC.lockEngageThresholdRad` of alignment. The two units visibly
+ * articulate apart around the hitch point while unlocked, same as a real
+ * towed trailer swinging out through a turn.
  */
 
 import { forwardVector, rightVector } from '../heading.ts';
@@ -42,15 +50,18 @@ export interface RigState {
   buggyX: number;
   buggyZ: number;
   buggyHeading: number;
+  // True when pinned perfectly straight (no steer input, settled aligned);
+  // see the module doc comment above for the full lock/unlock behavior.
+  locked: boolean;
   nozzleOn: boolean;
 }
 
 export const RIG_SPEC = {
   maxForwardSpeedFtPerSec: 9, // ~6 mph, a realistic striping crawl speed
   maxReverseSpeedFtPerSec: 5,
-  accelFtPerSec2: 6,
-  brakeFtPerSec2: 12,
-  maxTurnRateRadPerSec: 1.1,
+  accelFtPerSec2: 10,
+  brakeFtPerSec2: 16,
+  maxTurnRateRadPerSec: 1.6,
   frameLengthFt: 7, // hitch arm length: striper pivot to buggy pivot
   nozzleForwardOffsetFt: 2, // nozzle sits ahead of the striper pivot, near its front
   // Clearly outboard of every wheel's own right offset below (1.0-1.25) —
@@ -65,6 +76,10 @@ export const RIG_SPEC = {
   buggyWheelRightFt: 1.25,
   striperWheelForwardFt: 0.2,
   striperWheelRightFt: 1.0,
+  // How close buggyHeading must settle to striperHeading (via the trailer
+  // equation) before the lock re-engages after a turn. Small enough to be
+  // visually imperceptible as a snap.
+  lockEngageThresholdRad: 0.02,
 };
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -86,6 +101,7 @@ export function createInitialRigState(x: number, z: number, headingRad: number):
     buggyX: x - f.x * RIG_SPEC.frameLengthFt,
     buggyZ: z - f.z * RIG_SPEC.frameLengthFt,
     buggyHeading: headingRad,
+    locked: true,
     nozzleOn: false,
   };
 }
@@ -115,15 +131,33 @@ export function stepRig(state: RigState, input: RigInput, dt: number): RigState 
   const striperX = state.striperX + sf.x * speedFtPerSec * dt;
   const striperZ = state.striperZ + sf.z * speedFtPerSec * dt;
 
-  // Trailer-following kinematics: the buggy has no steering input of its
-  // own. Its heading evolves so its wheels roll without slipping while
-  // trailing a pivot moving at `speedFtPerSec` along `striperHeading` —
-  // the standard "car towing a trailer" equation. Stable equilibrium at
-  // buggyHeading == striperHeading (straight driving re-aligns them);
-  // diverges during reverse, same as a real trailer.
-  const diff = angleDiff(state.buggyHeading, striperHeading);
-  const buggyHeadingRate = (speedFtPerSec / spec.frameLengthFt) * Math.sin(diff);
-  const buggyHeading = state.buggyHeading + buggyHeadingRate * dt;
+  // Any steer input breaks the lock immediately, full stop.
+  let locked = state.locked && steer === 0;
+
+  let buggyHeading: number;
+  if (locked) {
+    // Pinned exactly straight — no residual wobble from the trailer
+    // equation's asymptotic convergence.
+    buggyHeading = striperHeading;
+  } else {
+    // Trailer-following kinematics: the buggy has no steering input of its
+    // own. Its heading evolves so its wheels roll without slipping while
+    // trailing a pivot moving at `speedFtPerSec` along `striperHeading` —
+    // the standard "car towing a trailer" equation. Stable equilibrium at
+    // buggyHeading == striperHeading (straight driving re-aligns them);
+    // diverges during reverse, same as a real trailer.
+    const diff = angleDiff(state.buggyHeading, striperHeading);
+    const buggyHeadingRate = (speedFtPerSec / spec.frameLengthFt) * Math.sin(diff);
+    buggyHeading = state.buggyHeading + buggyHeadingRate * dt;
+
+    // Re-engage the lock once settled back into alignment, but only if the
+    // player isn't actively steering (otherwise it'd re-lock mid-turn the
+    // instant the trailer equation happened to cross the threshold).
+    if (steer === 0 && Math.abs(angleDiff(buggyHeading, striperHeading)) < spec.lockEngageThresholdRad) {
+      locked = true;
+      buggyHeading = striperHeading;
+    }
+  }
 
   const bf = forwardVector(buggyHeading);
   // The hitch pivot is the striper's own reference point; the buggy trails
@@ -139,6 +173,7 @@ export function stepRig(state: RigState, input: RigInput, dt: number): RigState 
     buggyX,
     buggyZ,
     buggyHeading,
+    locked,
     nozzleOn: input.spray,
   };
 }

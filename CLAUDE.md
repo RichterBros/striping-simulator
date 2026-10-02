@@ -62,11 +62,26 @@ the steered reference — the handlebars are on the striper, full stop.
 The payoff of using real trailer-following kinematics rather than a rigid
 frame: drive straight for a bit and the buggy's heading naturally converges
 back to match the striper's (the stable equilibrium of the equation in
-`stepRig` — no explicit "lock" state needed). Turn, and the two visibly
-articulate apart around the hitch pivot, same as a real towed trailer
-swinging out. Reverse is correspondingly twitchy/unstable, same as backing
-up a real trailer — that's an accurate emergent property of the model, not
-a bug to fix.
+`stepRig`). Turn, and the two visibly articulate apart around the hitch
+pivot, same as a real towed trailer swinging out. Reverse is correspondingly
+twitchy/unstable, same as backing up a real trailer — that's an accurate
+emergent property of the model, not a bug to fix.
+
+On top of that sits an explicit **lock state** (`RigState.locked`) — added
+after the asymptotic convergence above turned out not to be enough on its
+own: it technically never reaches exact zero difference, and the user
+wanted driving straight to feel like a genuine rigid lock, not an
+approximation. While no steer input is held and the two units are aligned,
+`buggyHeading` is pinned to exactly equal `striperHeading` (not just
+converged close to it). **Any steer input breaks the lock immediately, on
+the very next physics step** — checked as `steer === 0` exactly, not a
+deadzone/threshold, since steer is always exactly -1/0/1 from discrete key
+state. Releasing the steer hands control back to the trailer equation,
+which re-engages the lock on its own once it settles within
+`RIG_SPEC.lockEngageThresholdRad`. Verified the exact transitions
+numerically (locked ⇄ unlocked on the correct frame, exact heading equality
+on lock/re-lock) rather than just eyeballing it — the threshold is only
+~1°, too small to reliably judge by screenshot.
 
 (An earlier version of this doc described a **rigid frame** instead,
 reasoning from the photos that the connecting bar looks solid/welded. That
