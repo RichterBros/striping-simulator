@@ -7,6 +7,7 @@ import type { JobDef } from './core/jobs.ts';
 import { YardScene } from './engine/threejs/yardScene.ts';
 import { JobSiteScene, type JobSiteInputState } from './engine/threejs/jobSiteScene.ts';
 import { Hud, type Phase } from './ui/hud.ts';
+import { TouchControls } from './ui/touchControls.ts';
 
 const equipmentDefs = equipmentData as EquipmentDef[];
 const jobs = jobsData as JobDef[];
@@ -28,6 +29,16 @@ let jobSiteScene: JobSiteScene | null = null;
 
 const input: JobSiteInputState = { forward: false, back: false, left: false, right: false, spray: false };
 
+// `(pointer: coarse)` asks "is the primary input imprecise/touch-like",
+// which is a better signal than touch-event support alone — a touchscreen
+// laptop with a mouse as its primary input should still get the keyboard
+// experience, not on-screen buttons it doesn't need.
+const isTouchPrimary = window.matchMedia('(pointer: coarse)').matches;
+const touchControls = isTouchPrimary
+  ? new TouchControls(app, input, (dir) => jobSiteScene?.nudgeRotate(dir))
+  : null;
+touchControls?.setVisible(false);
+
 function requiredEquipmentLoaded(job: JobDef, loaded: Set<string>): boolean {
   return job.requiredEquipment.every((id) => loaded.has(id));
 }
@@ -47,6 +58,7 @@ hud.setOnStartJob(() => {
   yardScene = null;
   jobSiteScene = new JobSiteScene(jobs[0], currentAspect(), renderer);
   hud.setPhase('jobsite');
+  touchControls?.setVisible(true);
 });
 
 renderer.domElement.addEventListener('click', (event) => {
