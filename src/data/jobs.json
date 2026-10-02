@@ -1,0 +1,15 @@
+[
+  {
+    "id": "riverside-plaza-lot-a",
+    "name": "Riverside Plaza — Lot A",
+    "siteDescription": "Small strip-mall lot. Two facing rows of 9x18 stalls across a 24ft drive aisle.",
+    "lot": {
+      "rows": 2,
+      "stallsPerRow": 10,
+      "stallWidthFt": 9,
+      "stallDepthFt": 18,
+      "aisleWidthFt": 24
+    },
+    "requiredEquipment": ["striping-rig", "paint-white"]
+  }
+]

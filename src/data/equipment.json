@@ -1,0 +1,44 @@
+[
+  {
+    "id": "striping-rig",
+    "name": "Ride-On Striping Rig",
+    "category": "vehicle",
+    "description": "Buggy + tow-behind striping machine. Required to paint lines.",
+    "required": true
+  },
+  {
+    "id": "paint-white",
+    "name": "White Traffic Paint",
+    "category": "consumable",
+    "description": "Standard stall and lane marking paint.",
+    "required": true
+  },
+  {
+    "id": "paint-yellow",
+    "name": "Yellow Traffic Paint",
+    "category": "consumable",
+    "description": "Used for fire lanes and accessibility striping.",
+    "required": false
+  },
+  {
+    "id": "traffic-cones",
+    "name": "Traffic Cones",
+    "category": "tool",
+    "description": "Marks off the work area while paint cures.",
+    "required": false
+  },
+  {
+    "id": "measuring-wheel",
+    "name": "Measuring Wheel",
+    "category": "tool",
+    "description": "Lays out stall spacing before striping.",
+    "required": false
+  },
+  {
+    "id": "stencil-kit",
+    "name": "Stencil Kit",
+    "category": "tool",
+    "description": "Handicap symbols, arrows, and lettering stencils.",
+    "required": false
+  }
+]
