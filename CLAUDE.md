@@ -73,15 +73,66 @@ own: it technically never reaches exact zero difference, and the user
 wanted driving straight to feel like a genuine rigid lock, not an
 approximation. While no steer input is held and the two units are aligned,
 `buggyHeading` is pinned to exactly equal `striperHeading` (not just
-converged close to it). **Any steer input breaks the lock immediately, on
-the very next physics step** — checked as `steer === 0` exactly, not a
-deadzone/threshold, since steer is always exactly -1/0/1 from discrete key
-state. Releasing the steer hands control back to the trailer equation,
-which re-engages the lock on its own once it settles within
-`RIG_SPEC.lockEngageThresholdRad`. Verified the exact transitions
+converged close to it). Releasing the steer hands control back to the
+trailer equation, which re-engages the lock on its own once it settles
+within `RIG_SPEC.lockEngageThresholdRad`. Verified the exact transitions
 numerically (locked ⇄ unlocked on the correct frame, exact heading equality
 on lock/re-lock) rather than just eyeballing it — the threshold is only
 ~1°, too small to reliably judge by screenshot.
+
+**While locked, steer input doesn't break the lock immediately — it goes
+through a tap-vs-hold decision first** (`RigState.tapSteerDir` /
+`tapHoldSec`, `RIG_SPEC.tapHoldThresholdSec` = 0.15s). This exists because
+aligning the stripe precisely by turning was fiddly — fine lateral
+adjustment was only available by breaking the lock, turning, and
+re-settling, which is slow and imprecise for what's often just a tiny
+correction. Now:
+- **A quick tap** (steer pressed and released again before the threshold)
+  does not turn or unlock anything. It nudges the whole rig sideways by a
+  small fixed distance (`RIG_SPEC.nudgeDistanceFt`, currently 0.1ft) —
+  applied as a lateral offset to the striper's position (using
+  `rightVector(striperHeading)`), which the buggy automatically inherits
+  through the existing hitch-arm derivation (`buggyX/Z = striperX/Z -
+  forward(buggyHeading)*frameLengthFt`) — no separate handling needed for
+  the buggy's side of it.
+- **Holding steer past the threshold** breaks the lock and hands off to
+  normal steering immediately on the same frame the threshold is crossed —
+  from there it behaves exactly like unlocked steering always has.
+- **Heading is frozen during the pending window** (the first
+  `tapHoldThresholdSec` of any new press while locked) — we can't know yet
+  whether it's a tap or the start of a hold, so nothing turns until that's
+  decided. This means every hold-to-steer has a ~150ms window before
+  turning visibly starts; an accepted tradeoff of needing *some* waiting
+  period to disambiguate a tap from the start of a hold at all. Don't
+  shorten `tapHoldThresholdSec` much to "fix" this without checking it
+  doesn't start swallowing deliberate taps instead.
+- Verified all of it numerically: heading provably unchanged for the whole
+  pending window, a short press produces exactly one nudge of exactly
+  `nudgeDistanceFt` applied only on release (not during the press), repeated
+  taps accumulate (two taps measured at exactly 2x one tap's offset), and a
+  sustained press crosses into an unlocked, actively-steering state right
+  around the expected frame count. Also confirmed visually: a lot driven
+  with several quick taps shows a visibly stepped/jogged stripe (discrete
+  lateral jumps between straight segments), clearly distinct from the smooth
+  curve a real turn produces.
+
+**Q/E give a second, rotational flavor of fine-adjustment** — `nudgeRotate(state, dir)`
+in `stripingRig.ts`, a small fixed heading change (`RIG_SPEC.rotateNudgeRad`,
+currently ~1.15°) around the striper's own position (same pivot normal
+steering already uses), still locked afterward since both headings move
+together. Deliberately **not** built on the same tap/hold machinery as A/D:
+there's no competing "hold" behavior to disambiguate from for Q/E (nothing
+else is bound to them), so every `keydown` — including the browser's native
+key-repeat while held — just fires one nudge directly, called straight from
+`main.ts`'s keydown handler rather than through the per-frame polled
+`JobSiteScene.update()` input (see `JobSiteScene.nudgeRotate`). A no-op
+while unlocked, same precondition as the lateral nudge. Sign convention
+matches `RigInput.steer` (+1 = right = E, -1 = left = Q) — verified against
+an actual held D-turn that the signs genuinely agree, not just that they're
+opposite each other, since a self-consistent-but-backwards sign convention
+would pass a weaker test. Repeated nudges accumulate into a visibly smooth
+curve (not stepped, unlike the lateral nudge) since each one changes heading
+and the rig keeps moving between presses — confirmed visually.
 
 (An earlier version of this doc described a **rigid frame** instead,
 reasoning from the photos that the connecting bar looks solid/welded. That
@@ -246,6 +297,8 @@ striping-simulator/
 │   │   ├── paintRibbon.ts             — RibbonTrail: 3D geometry for the stripe + tire tracks (ground itself is a plain colored material, no texture)
 │   │   ├── yardScene.ts               — equipment yard scene, click-to-load truck
 │   │   └── jobSiteScene.ts            — job site scene, drives rig physics + paint + coverage each frame
+│   ├── engine/audio/
+│   │   └── rigAudio.ts                — RigAudio: procedurally synthesized engine hum + hitch lock/unlock clicks
 │   └── ui/
 │       └── hud.ts                     — DOM overlay: phase instructions, Start Job button, completion bar
 └── reference images/
@@ -272,6 +325,17 @@ striping-simulator/
 
 ## Mechanics notes / gotchas learned the hard way
 
+- **Steering authority should ramp up to full by some speed well under top
+  speed, not scale all the way to `maxForwardSpeedFtPerSec`.** Originally
+  `speedFraction` (which gates turn rate — no steering at a standstill) was
+  computed as `currentSpeed / maxForwardSpeedFtPerSec`, which meant turning
+  only felt sharp at or near full throttle and noticeably duller at normal
+  cruising speed. Decoupled into its own `turnRampSpeedFtPerSec` (currently
+  2.5, vs. a 9 ft/s top speed) so normal driving already gets full turn
+  rate. Verified with an isolated test that a 90° turn now takes the same
+  time at half throttle as at full throttle (confirms the ramp, not just
+  max turn rate, was the actual fix — bumping `maxTurnRateRadPerSec` alone
+  wouldn't have helped at partial throttle).
 - **Top-down orthographic camera must size itself from the canvas aspect
   ratio**, not a fixed world width/height. Getting this wrong stretches
   circles into ellipses and can push content outside the visible frustum.
@@ -388,6 +452,21 @@ striping-simulator/
   window hook isn't showing up" — it's this, not a game bug. To get data out
   for verification, write it into DOM text content (e.g. a hidden debug
   `<div>`) and read that back instead.
+- **Audio (`RigAudio`) must be constructed from inside a real user-gesture
+  call stack, or the browser silently creates the `AudioContext` suspended
+  and nothing plays.** `JobSiteScene`'s constructor — which is where
+  `RigAudio` gets created — already runs synchronously inside the "Start
+  Job" button's click handler in `main.ts`, so it piggybacks on that gesture
+  for free. If audio ever moves earlier (e.g. yard-phase ambience) it needs
+  its own deliberate gesture trigger (a click/keypress), not just "construct
+  it at page load." Sounds are synthesized procedurally via raw Web Audio
+  API nodes (oscillators, filters, a noise-burst buffer for the clicks) —
+  no imported audio files yet, consistent with every other asset in the
+  project being procedural. Verified the engine/click wiring by driving the
+  rig through a full lock → unlock → re-lock cycle and confirming
+  `AudioContext.state === 'running'` plus the exact click counts (0 while
+  straight, 1 unlock on turning, 1 lock on settling back), not just that the
+  code compiled.
 
 ## Future: drive-to-job-site phase (design notes only — not implemented)
 

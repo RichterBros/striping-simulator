@@ -44,10 +44,10 @@ export interface OverShoulderTarget {
  */
 export class OverShoulderCamera {
   readonly camera: THREE.PerspectiveCamera;
-  private readonly backDistanceFt = 11;
-  private readonly heightFt = 5;
-  private readonly sideOffsetFt = 4.5; // toward the buggy's right
-  private readonly lookAheadFt = 8;
+  private readonly backDistanceFt = 8;
+  private readonly heightFt = 4;
+  private readonly sideOffsetFt = 3.2; // toward the buggy's right
+  private readonly lookAheadFt = 6;
   private readonly followLerp = 6; // higher = snappier
 
   constructor(aspect: number) {

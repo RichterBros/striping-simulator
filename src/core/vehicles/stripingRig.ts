@@ -22,12 +22,18 @@
  * units are aligned, they're pinned perfectly straight (buggyHeading forced
  * to equal striperHeading exactly) rather than left to the trailer
  * equation's asymptotic convergence, which technically never reaches exact
- * zero and could show a faint residual wobble. Any steer input immediately
- * breaks the lock and hands control back to the trailer equation, which
- * re-engages the lock on its own once it has settled back within
- * `RIG_SPEC.lockEngageThresholdRad` of alignment. The two units visibly
+ * zero and could show a faint residual wobble. The two units visibly
  * articulate apart around the hitch point while unlocked, same as a real
  * towed trailer swinging out through a turn.
+ *
+ * While locked, a quick TAP of steer (press and release within
+ * `tapHoldThresholdSec`) does NOT break the lock or turn anything — it
+ * nudges the whole rig sideways by a small fixed distance
+ * (`nudgeDistanceFt`), for fine-positioning the stripe without having to
+ * fight the full turning physics over it. HOLDING steer past that
+ * threshold breaks the lock and hands off to normal steering, same as
+ * before. See the tap/hold bookkeeping (`tapSteerDir`/`tapHoldSec`) in
+ * `stepRig` for the exact state machine.
  */
 
 import { forwardVector, rightVector } from '../heading.ts';
@@ -53,6 +59,11 @@ export interface RigState {
   // True when pinned perfectly straight (no steer input, settled aligned);
   // see the module doc comment above for the full lock/unlock behavior.
   locked: boolean;
+  // Tap/hold disambiguation while locked: the steer direction (-1/0/1) of
+  // the press currently being timed, and how long it's been held so far.
+  // 0/0 when nothing is pending (always true while unlocked).
+  tapSteerDir: number;
+  tapHoldSec: number;
   nozzleOn: boolean;
 }
 
@@ -61,7 +72,12 @@ export const RIG_SPEC = {
   maxReverseSpeedFtPerSec: 5,
   accelFtPerSec2: 10,
   brakeFtPerSec2: 16,
-  maxTurnRateRadPerSec: 1.6,
+  maxTurnRateRadPerSec: 2.6,
+  // Steering ramps up to full authority by this speed, NOT by
+  // maxForwardSpeedFtPerSec — a full-range ramp meant turning only felt
+  // sharp at top speed and sluggish everywhere below it. This is well
+  // under max speed so normal cruising already gets full turn rate.
+  turnRampSpeedFtPerSec: 2.5,
   frameLengthFt: 7, // hitch arm length: striper pivot to buggy pivot
   nozzleForwardOffsetFt: 2, // nozzle sits ahead of the striper pivot, near its front
   // Clearly outboard of every wheel's own right offset below (1.0-1.25) —
@@ -80,6 +96,16 @@ export const RIG_SPEC = {
   // equation) before the lock re-engages after a turn. Small enough to be
   // visually imperceptible as a snap.
   lockEngageThresholdRad: 0.02,
+  // Tap-vs-hold threshold while locked: a steer press released before this
+  // many seconds elapse is a tap (nudge); held past it becomes a normal
+  // steering hold (breaks the lock). Short enough not to feel laggy on a
+  // deliberate hold, long enough to reliably catch a quick tap.
+  tapHoldThresholdSec: 0.15,
+  // World-space lateral distance a single completed tap nudges the whole
+  // (locked, so still rigid) rig sideways.
+  nudgeDistanceFt: 0.1,
+  // Heading change applied by a single Q/E rotate-nudge (see nudgeRotate).
+  rotateNudgeRad: 0.02, // ~1.15 deg
 };
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -102,6 +128,8 @@ export function createInitialRigState(x: number, z: number, headingRad: number):
     buggyZ: z - f.z * RIG_SPEC.frameLengthFt,
     buggyHeading: headingRad,
     locked: true,
+    tapSteerDir: 0,
+    tapHoldSec: 0,
     nozzleOn: false,
   };
 }
@@ -117,22 +145,67 @@ export function stepRig(state: RigState, input: RigInput, dt: number): RigState 
   const speedDelta = clamp(targetSpeed - state.speedFtPerSec, -accel * dt, accel * dt);
   const speedFtPerSec = state.speedFtPerSec + speedDelta;
 
+  // --- Lock / tap-vs-hold / nudge state machine -----------------------
+  // While locked, a steer press doesn't immediately do anything — we wait
+  // to see whether it's a quick tap (nudge, lock stays) or a sustained hold
+  // (breaks the lock, hands off to normal steering below). While already
+  // unlocked, steering is immediate as always; no tap/hold bookkeeping.
+  let locked = state.locked;
+  let tapSteerDir = 0;
+  let tapHoldSec = 0;
+  let steeringActive = !locked;
+  let nudgeFt = 0;
+
+  if (locked) {
+    if (steer !== 0) {
+      if (state.tapSteerDir === steer) {
+        tapHoldSec = state.tapHoldSec + dt;
+      } else {
+        // New press (or a direction change mid-press, which just restarts
+        // the timer for the new direction rather than firing a nudge for
+        // whatever was pending before).
+        tapHoldSec = dt;
+      }
+      tapSteerDir = steer;
+
+      if (tapHoldSec >= spec.tapHoldThresholdSec) {
+        // Graduated into a hold: break the lock and steer immediately,
+        // this same frame.
+        locked = false;
+        steeringActive = true;
+        tapSteerDir = 0;
+        tapHoldSec = 0;
+      }
+    } else if (state.tapSteerDir !== 0 && state.tapHoldSec < spec.tapHoldThresholdSec) {
+      // Key released before the hold threshold: a completed tap.
+      nudgeFt = state.tapSteerDir * spec.nudgeDistanceFt;
+    }
+  }
+
   // No steering authority while essentially stopped, like real handlebars
-  // that need rolling speed to actually turn the rig.
-  const speedFraction = clamp(Math.abs(speedFtPerSec) / spec.maxForwardSpeedFtPerSec, 0, 1);
+  // that need rolling speed to actually turn the rig — but full authority
+  // well before max speed (see turnRampSpeedFtPerSec above).
+  const speedFraction = clamp(Math.abs(speedFtPerSec) / spec.turnRampSpeedFtPerSec, 0, 1);
   const turnDir = speedFtPerSec >= 0 ? 1 : -1;
   // Negated: with heading 0 pointing toward +Z, increasing heading curves
   // toward +X, which is screen-left for a camera facing +Z. Flip so that
   // steer > 0 (D / right) turns right on screen, steer < 0 (A / left) turns left.
-  const headingDelta = -steer * spec.maxTurnRateRadPerSec * speedFraction * turnDir * dt;
+  const headingDelta = steeringActive ? -steer * spec.maxTurnRateRadPerSec * speedFraction * turnDir * dt : 0;
   const striperHeading = state.striperHeading + headingDelta;
 
   const sf = forwardVector(striperHeading);
-  const striperX = state.striperX + sf.x * speedFtPerSec * dt;
-  const striperZ = state.striperZ + sf.z * speedFtPerSec * dt;
+  let striperX = state.striperX + sf.x * speedFtPerSec * dt;
+  let striperZ = state.striperZ + sf.z * speedFtPerSec * dt;
 
-  // Any steer input breaks the lock immediately, full stop.
-  let locked = state.locked && steer === 0;
+  if (nudgeFt !== 0) {
+    // Nudge is lateral only — both units are still rigidly aligned at this
+    // point (we're still locked), so shifting the striper's reference
+    // point sideways and re-deriving the buggy from it (below) moves the
+    // whole rig sideways together, heading unchanged.
+    const r = rightVector(striperHeading);
+    striperX += r.x * nudgeFt;
+    striperZ += r.z * nudgeFt;
+  }
 
   let buggyHeading: number;
   if (locked) {
@@ -174,7 +247,41 @@ export function stepRig(state: RigState, input: RigInput, dt: number): RigState 
     buggyZ,
     buggyHeading,
     locked,
+    tapSteerDir,
+    tapHoldSec,
     nozzleOn: input.spray,
+  };
+}
+
+/**
+ * A single discrete rotate-nudge (Q/E keys), separate from the steer-driven
+ * tap/hold system above since there's no competing "hold" behavior to
+ * disambiguate from — every keydown (including the browser's natural
+ * key-repeat while held) just applies one nudge. `dir` follows the same
+ * sign convention as `RigInput.steer`: +1 = right (E), -1 = left (Q). A
+ * no-op while unlocked — fine-rotating only makes sense once the two units
+ * are aligned, same precondition as the lateral nudge.
+ *
+ * Rotates around the striper's own position (its handlebars are what's
+ * conceptually being nudged), re-deriving the buggy from it via the same
+ * hitch-arm formula `stepRig` uses — identical in spirit to how normal
+ * steering already moves the striper and lets the buggy follow.
+ */
+export function nudgeRotate(state: RigState, dir: number): RigState {
+  if (!state.locked) return state;
+
+  const striperHeading = state.striperHeading - dir * RIG_SPEC.rotateNudgeRad;
+  const buggyHeading = striperHeading; // still locked/aligned
+  const bf = forwardVector(buggyHeading);
+  const buggyX = state.striperX - bf.x * RIG_SPEC.frameLengthFt;
+  const buggyZ = state.striperZ - bf.z * RIG_SPEC.frameLengthFt;
+
+  return {
+    ...state,
+    striperHeading,
+    buggyHeading,
+    buggyX,
+    buggyZ,
   };
 }
 

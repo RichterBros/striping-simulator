@@ -7,6 +7,9 @@ const CONTROLS_TEXT =
   'JOB SITE\n' +
   'W / S  —  drive forward / back\n' +
   'A / D  —  steer left / right\n' +
+  '  While driving straight, a quick tap nudges\n' +
+  '  sideways without turning — hold to steer normally\n' +
+  'Q / E  —  nudge-rotate left / right (while driving straight)\n' +
   'SPACE  —  spray paint';
 
 export class Hud {
@@ -76,7 +79,7 @@ export class Hud {
       this.controlsPanel.style.display = 'block';
     } else {
       this.instructions.textContent =
-        'W/S: drive  A/D: steer  SPACE: spray paint  — stripe the lot along the reference lines.';
+        'W/S: drive  A/D: steer (tap to nudge, hold to turn)  Q/E: nudge-rotate  SPACE: spray paint  — stripe the lot along the reference lines.';
       this.startButton.style.display = 'none';
       this.completionWrap.style.display = 'block';
       this.controlsPanel.style.display = 'none';

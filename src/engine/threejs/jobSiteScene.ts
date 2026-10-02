@@ -7,6 +7,7 @@ import {
   createInitialRigState,
   hitchPivotPosition,
   nozzleWorldPosition,
+  nudgeRotate,
   RIG_SPEC,
   stepRig,
   wheelContacts,
@@ -22,6 +23,7 @@ import {
 import { buildBuggyMesh, buildStriperMesh } from './vehicleMesh.ts';
 import { OverShoulderCamera } from './cameras.ts';
 import { RibbonTrail } from './paintRibbon.ts';
+import { RigAudio } from '../audio/rigAudio.ts';
 
 const PAINT_COLOR = '#f5f3ee';
 const ASPHALT_COLOR = '#3a3b3d';
@@ -62,6 +64,8 @@ export class JobSiteScene {
   private elapsedSec = 0;
   private readonly groundWidthFt: number;
   private readonly groundDepthFt: number;
+  private readonly audio: RigAudio;
+  private wasLocked: boolean;
 
   constructor(job: JobDef, aspect: number) {
     const footprint = lotFootprint(job.lot);
@@ -118,7 +122,15 @@ export class JobSiteScene {
     const startX = footprint.widthFt / 2;
     const startZ = -GROUND_MARGIN_FT / 2;
     this.rig = createInitialRigState(startX, startZ, 0);
+    this.wasLocked = this.rig.locked;
     this.syncMeshesToRig();
+
+    // Constructed here (not lazily) because this constructor itself runs
+    // synchronously inside the "Start Job" button's click handler in
+    // main.ts — that's the real user gesture browsers require before an
+    // AudioContext is allowed to actually produce sound.
+    this.audio = new RigAudio();
+    this.audio.start();
 
     this.overShoulder = new OverShoulderCamera(aspect);
     this.overShoulder.snapTo({ x: this.rig.buggyX, z: this.rig.buggyZ, heading: this.rig.buggyHeading });
@@ -156,6 +168,13 @@ export class JobSiteScene {
 
     this.rig = stepRig(this.rig, rigInput, dt);
     this.syncMeshesToRig();
+
+    if (this.rig.locked !== this.wasLocked) {
+      if (this.rig.locked) this.audio.playLockClick();
+      else this.audio.playUnlockClick();
+      this.wasLocked = this.rig.locked;
+    }
+    this.audio.setEngineLevel(Math.abs(this.rig.speedFtPerSec) / RIG_SPEC.maxForwardSpeedFtPerSec);
 
     if (this.rig.nozzleOn) {
       const nozzlePos = nozzleWorldPosition(this.rig);
@@ -196,6 +215,14 @@ export class JobSiteScene {
 
   getNozzleWorldPosition(): { x: number; z: number } {
     return nozzleWorldPosition(this.rig);
+  }
+
+  /** Discrete Q/E rotate-nudge — called directly from a keydown handler
+   * (not the per-frame update() input), since it's a one-shot action, not
+   * a continuous held input. No-ops while unlocked. */
+  nudgeRotate(dir: number): void {
+    this.rig = nudgeRotate(this.rig, dir);
+    this.syncMeshesToRig();
   }
 
   get nozzleMarkerObject(): THREE.Object3D {

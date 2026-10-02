@@ -68,6 +68,16 @@ const keyMap: Record<string, keyof JobSiteInputState> = {
 };
 
 window.addEventListener('keydown', (e) => {
+  // Q/E rotate-nudge: a discrete one-shot action (not a held/continuous
+  // input like the rest of these), so it's fired straight from the keydown
+  // event rather than going through the per-frame `input` polling below.
+  // The browser's natural key-repeat while held gives "hold to repeat" for
+  // free, no custom timing needed.
+  if (phase === 'jobsite' && jobSiteScene) {
+    if (e.code === 'KeyQ') jobSiteScene.nudgeRotate(-1);
+    else if (e.code === 'KeyE') jobSiteScene.nudgeRotate(1);
+  }
+
   const field = keyMap[e.code];
   if (!field) return;
   input[field] = true;
@@ -78,6 +88,17 @@ window.addEventListener('keyup', (e) => {
   const field = keyMap[e.code];
   if (!field) return;
   input[field] = false;
+});
+
+// If focus is lost while a key is physically held (alt-tab, clicking into
+// devtools, etc.), the browser never fires its keyup — the key would
+// otherwise stay logically "stuck" down indefinitely.
+window.addEventListener('blur', () => {
+  input.forward = false;
+  input.back = false;
+  input.left = false;
+  input.right = false;
+  input.spray = false;
 });
 
 function currentAspect(): number {
