@@ -30,9 +30,16 @@ export function frameTopDownCamera(
 }
 
 export interface OverShoulderTarget {
-  x: number;
-  z: number;
-  heading: number;
+  buggyX: number;
+  buggyZ: number;
+  buggyHeading: number;
+  // Needed for the spray zoom: the nozzle doesn't share the buggy's
+  // heading (it's on the striper, independently steered), so zooming in on
+  // it needs its own position/heading rather than reusing the buggy's.
+  nozzleX: number;
+  nozzleZ: number;
+  striperHeading: number;
+  spraying: boolean;
 }
 
 /**
@@ -41,6 +48,12 @@ export interface OverShoulderTarget {
  * own body doesn't block the view of the striper/nozzle directly ahead on a
  * rigid, non-articulated frame — a dead-center chase cam would have them
  * collinear on straightaways.
+ *
+ * While spraying, swaps to a close shot of the nozzle itself instead — the
+ * actual painting is the thing worth seeing up close. Both shots reuse the
+ * same exponential-smoothing follow in `update()`, so the camera eases
+ * between them as `spraying` toggles rather than snapping; no separate
+ * transition/animation logic needed.
  */
 export class OverShoulderCamera {
   readonly camera: THREE.PerspectiveCamera;
@@ -49,6 +62,10 @@ export class OverShoulderCamera {
   private readonly sideOffsetFt = 3.2; // toward the buggy's right
   private readonly lookAheadFt = 6;
   private readonly followLerp = 6; // higher = snappier
+
+  private readonly zoomBackDistanceFt = 3.8;
+  private readonly zoomHeightFt = 2.6;
+  private readonly zoomSideOffsetFt = 1.8;
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(68, aspect, 0.1, 1000);
@@ -74,21 +91,33 @@ export class OverShoulderCamera {
   }
 
   private desiredPosition(target: OverShoulderTarget): { x: number; y: number; z: number } {
-    const f = forwardVector(target.heading);
-    const r = rightVector(target.heading);
+    if (target.spraying) {
+      const f = forwardVector(target.striperHeading);
+      const r = rightVector(target.striperHeading);
+      return {
+        x: target.nozzleX - f.x * this.zoomBackDistanceFt + r.x * this.zoomSideOffsetFt,
+        y: this.zoomHeightFt,
+        z: target.nozzleZ - f.z * this.zoomBackDistanceFt + r.z * this.zoomSideOffsetFt,
+      };
+    }
+    const f = forwardVector(target.buggyHeading);
+    const r = rightVector(target.buggyHeading);
     return {
-      x: target.x - f.x * this.backDistanceFt + r.x * this.sideOffsetFt,
+      x: target.buggyX - f.x * this.backDistanceFt + r.x * this.sideOffsetFt,
       y: this.heightFt,
-      z: target.z - f.z * this.backDistanceFt + r.z * this.sideOffsetFt,
+      z: target.buggyZ - f.z * this.backDistanceFt + r.z * this.sideOffsetFt,
     };
   }
 
   private lookTarget(target: OverShoulderTarget): { x: number; y: number; z: number } {
-    const f = forwardVector(target.heading);
+    if (target.spraying) {
+      return { x: target.nozzleX, y: 0.3, z: target.nozzleZ };
+    }
+    const f = forwardVector(target.buggyHeading);
     return {
-      x: target.x + f.x * this.lookAheadFt,
+      x: target.buggyX + f.x * this.lookAheadFt,
       y: 1.2,
-      z: target.z + f.z * this.lookAheadFt,
+      z: target.buggyZ + f.z * this.lookAheadFt,
     };
   }
 }

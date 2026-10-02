@@ -7,9 +7,9 @@ const CONTROLS_TEXT =
   'JOB SITE\n' +
   'W / S  —  drive forward / back\n' +
   'A / D  —  steer left / right\n' +
-  '  While driving straight, a quick tap nudges\n' +
+  '  While locked, a quick tap nudges\n' +
   '  sideways without turning — hold to steer normally\n' +
-  'Q / E  —  nudge-rotate left / right (while driving straight)\n' +
+  'Q / E  —  nudge-rotate left / right (while locked)\n' +
   'SPACE  —  spray paint';
 
 export class Hud {

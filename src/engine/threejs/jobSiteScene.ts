@@ -21,7 +21,7 @@ import {
   type TireContaminationState,
 } from '../../core/vehicles/tireContamination.ts';
 import { buildBuggyMesh, buildStriperMesh } from './vehicleMesh.ts';
-import { OverShoulderCamera } from './cameras.ts';
+import { OverShoulderCamera, type OverShoulderTarget } from './cameras.ts';
 import { RibbonTrail } from './paintRibbon.ts';
 import { RigAudio } from '../audio/rigAudio.ts';
 
@@ -133,7 +133,20 @@ export class JobSiteScene {
     this.audio.start();
 
     this.overShoulder = new OverShoulderCamera(aspect);
-    this.overShoulder.snapTo({ x: this.rig.buggyX, z: this.rig.buggyZ, heading: this.rig.buggyHeading });
+    this.overShoulder.snapTo(this.overShoulderTarget());
+  }
+
+  private overShoulderTarget(): OverShoulderTarget {
+    const nozzle = nozzleWorldPosition(this.rig);
+    return {
+      buggyX: this.rig.buggyX,
+      buggyZ: this.rig.buggyZ,
+      buggyHeading: this.rig.buggyHeading,
+      nozzleX: nozzle.x,
+      nozzleZ: nozzle.z,
+      striperHeading: this.rig.striperHeading,
+      spraying: this.rig.nozzleOn,
+    };
   }
 
   private buildReferenceLines(lines: ReturnType<typeof generateStallLines>): THREE.LineSegments {
@@ -204,10 +217,7 @@ export class JobSiteScene {
       for (const trail of this.wheelTrails) trail.breakStroke();
     }
 
-    this.overShoulder.update(
-      { x: this.rig.buggyX, z: this.rig.buggyZ, heading: this.rig.buggyHeading },
-      dt,
-    );
+    this.overShoulder.update(this.overShoulderTarget(), dt);
 
     this.stripeRibbon.commitFrame();
     for (const trail of this.wheelTrails) trail.commitFrame();

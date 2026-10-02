@@ -356,6 +356,18 @@ striping-simulator/
   straight-line driving is the common case. Whenever you change the rig's
   geometry, re-check camera framing with real screenshots (including
   mid-turn and while actively spraying), don't just reason about it on paper.
+- **`OverShoulderCamera` has two shots, not one — the normal over-the-
+  shoulder framing above, and a close zoom on the nozzle while `spraying`
+  is true.** The actual painting is the thing worth seeing up close, so
+  pressing Space doesn't just spray, it reframes the whole shot. Both
+  `desiredPosition`/`lookTarget` branch on `target.spraying` internally;
+  critically, this reuses the exact same exponential-smoothing `update()`
+  loop as the normal shot rather than needing separate transition/animation
+  code — the camera just eases toward whichever desired position the target
+  currently implies, so toggling `spraying` eases smoothly between the two
+  shots for free. Needed extending `OverShoulderTarget` beyond the buggy's
+  own transform (`nozzleX/Z`, `striperHeading`) since the nozzle doesn't
+  share the buggy's heading — it's on the independently-steered striper.
 - **The buggy/striper hitch model has changed three times — know which one
   is current before touching `stripingRig.ts`.** In order: (1) a
   free-swinging trailer hitch where the trailing object was placed along
