@@ -586,14 +586,19 @@ just a percentage ticking up silently.
   `main.ts`" pattern as `completionFraction`) — visible exactly while the
   hitch is locked straight, gone the instant a steering hold breaks it. Shows
   a small "WHEEL" label stacked above the lock text.
-- **Chrome nozzle.** The spray gun housing (`buildNozzleArmAssembly` in
-  `vehicleMesh.ts`) was flat near-black (`0x222222`, no metalness). Changed to
-  `metalness: 1, roughness: 0.08` with a light silver base color. A pure-metal
-  PBR material with nothing to reflect just looks flat and dark, so
-  `JobSiteScene`'s constructor now takes the `THREE.WebGLRenderer` and builds a
-  `scene.environment` via `PMREMGenerator` + three's `RoomEnvironment` addon
-  (`three/examples/jsm/environments/RoomEnvironment.js`) specifically so metal
-  surfaces have something to reflect.
+- **Nozzle housing finish.** The spray gun housing (`buildNozzleArmAssembly` in
+  `vehicleMesh.ts`) was flat near-black (`0x222222`, no metalness) — first
+  changed to a fully-metallic polished chrome (`metalness: 1, roughness: 0.08`)
+  for visibility, then dialed back to a painted-plastic orange
+  (`NOZZLE_HOUSING_COLOR = 0xe8622a`, `metalness: 0.1, roughness: 0.45`,
+  matching real Graco-style spray gun housings) after the chrome version read
+  as too reflective/distracting in motion. `JobSiteScene`'s constructor still
+  takes the `THREE.WebGLRenderer` and builds a `scene.environment` via
+  `PMREMGenerator` + three's `RoomEnvironment` addon
+  (`three/examples/jsm/environments/RoomEnvironment.js`) — a pure-metal PBR
+  material with nothing to reflect just looks flat/dark, and other metal
+  parts (handlebars, arm brackets, hitch bar) still rely on it even though
+  the nozzle itself no longer does.
 
 ## Future: drive-to-job-site phase (design notes only — not implemented)
 

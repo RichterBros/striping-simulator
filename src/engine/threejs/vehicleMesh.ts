@@ -10,13 +10,69 @@ const BUGGY_COLOR = 0x1c3f94;
 const STRIPER_COLOR = 0x1c3f94;
 const WHEEL_COLOR = 0x111111;
 const METAL_COLOR = 0xb9c2cc;
-const CHROME_COLOR = 0xf2f4f6;
+const NOZZLE_HOUSING_COLOR = 0xe8622a;
 
+const WHEEL_RIM_COLOR = 0xf2f2f2;
+const WHEEL_HUB_COLOR = 0x1c1c1c;
+const WHEEL_LUG_COLOR = 0xc9cdd1;
+const wheelRimMat = new THREE.MeshStandardMaterial({ color: WHEEL_RIM_COLOR, roughness: 0.5 });
+const wheelHubMat = new THREE.MeshStandardMaterial({ color: WHEEL_HUB_COLOR, roughness: 0.6 });
+const wheelLugMat = new THREE.MeshStandardMaterial({ color: WHEEL_LUG_COLOR, metalness: 0.6, roughness: 0.3 });
+
+/** Matches `reference images/wheel-ref.png`: black tire, white rim, dark
+ * center hub cap, 5 lug nuts. */
 function wheel(radius: number, width: number): THREE.Mesh {
   const geo = new THREE.CylinderGeometry(radius, radius, width, 16);
+  // Bakes the cylinder's axis onto local X, so spinning the mesh around its
+  // own rotation.x (done per-frame in JobSiteScene, driven by distance
+  // traveled) reads as the wheel actually rolling, not just a static disc.
   geo.rotateZ(Math.PI / 2);
   const mat = new THREE.MeshStandardMaterial({ color: WHEEL_COLOR, roughness: 0.9 });
-  return new THREE.Mesh(geo, mat);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = 'wheel';
+  mesh.userData.wheelRadiusFt = radius;
+
+  // Rim/hub/lugs are built on both faces (not just the outward-facing one),
+  // since which local-X direction ends up facing the camera depends on
+  // which side of the vehicle the wheel is on — a single-faced build risks
+  // putting all the detail on whichever face is hidden against the
+  // chassis. They're children of the wheel mesh, so they spin for free
+  // along with mesh.rotation.x; this is also what makes the (otherwise
+  // radially-symmetric) tire's rotation visually readable at all.
+  for (const side of [1, -1]) {
+    const faceX = (side * width) / 2 + side * 0.01; // sits just proud of the tire face
+
+    const rim = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius * 0.62, radius * 0.62, width * 0.12, 16),
+      wheelRimMat,
+    );
+    rim.rotation.z = Math.PI / 2;
+    rim.position.set(faceX, 0, 0);
+    mesh.add(rim);
+
+    const hub = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius * 0.18, radius * 0.18, width * 0.18, 12),
+      wheelHubMat,
+    );
+    hub.rotation.z = Math.PI / 2;
+    hub.position.set(faceX + side * 0.02, 0, 0);
+    mesh.add(hub);
+
+    const lugCount = 5;
+    const lugOrbitRadius = radius * 0.32;
+    for (let i = 0; i < lugCount; i++) {
+      const angle = (i / lugCount) * Math.PI * 2;
+      const lug = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.07, 6, 6), wheelLugMat);
+      lug.position.set(
+        faceX + side * 0.025,
+        Math.cos(angle) * lugOrbitRadius,
+        Math.sin(angle) * lugOrbitRadius,
+      );
+      mesh.add(lug);
+    }
+  }
+
+  return mesh;
 }
 
 export function buildBuggyMesh(): THREE.Group {
@@ -175,20 +231,13 @@ function buildNozzleArmAssembly(): THREE.Group {
 
   const gunHousing = new THREE.Mesh(
     new THREE.BoxGeometry(0.28, 0.22, 0.4),
-    // Fully metallic + near-zero roughness so it reads as polished chrome —
-    // relies on JobSiteScene setting scene.environment, since a metal
-    // material with no environment map to reflect just looks flat/dark.
-    new THREE.MeshStandardMaterial({ color: CHROME_COLOR, metalness: 1, roughness: 0.08 }),
+    // Painted-plastic orange housing (matches real Graco-style spray guns),
+    // not polished chrome — low metalness, moderate roughness for a
+    // semi-gloss painted finish rather than a mirror.
+    new THREE.MeshStandardMaterial({ color: NOZZLE_HOUSING_COLOR, metalness: 0.1, roughness: 0.45 }),
   );
   gunHousing.position.set(0, gunHeight - barHeight, length);
   assembly.add(gunHousing);
-
-  // Counter-rotate so the little guide wheel still rolls aligned with the
-  // rig's main direction of travel, regardless of the arm's own angle.
-  const guideWheel = wheel(0.12, 0.08);
-  guideWheel.rotation.y = -angle;
-  guideWheel.position.set(0, markerHeight - barHeight, length + 0.2);
-  assembly.add(guideWheel);
 
   // Marker object: its world position is read to place paint. Kept tiny/invisible.
   const nozzleMarker = new THREE.Object3D();

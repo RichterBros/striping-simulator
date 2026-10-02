@@ -60,6 +60,7 @@ export class JobSiteScene {
   private readonly nozzleMarker: THREE.Object3D;
   private readonly stripeRibbon: RibbonTrail;
   private readonly wheelTrails: RibbonTrail[];
+  private readonly wheelMeshes: { mesh: THREE.Mesh; radiusFt: number }[] = [];
   private readonly coverage: CoverageTracker;
   private readonly wetPaint: WetPaintField;
   private tireContamination: TireContaminationState = createTireContaminationState();
@@ -139,12 +140,15 @@ export class JobSiteScene {
 
     this.buggyMesh = buildBuggyMesh();
     this.striperMesh = buildStriperMesh();
-    this.buggyMesh.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) obj.castShadow = true;
-    });
-    this.striperMesh.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) obj.castShadow = true;
-    });
+    const prepareMesh = (obj: THREE.Object3D): void => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      obj.castShadow = true;
+      if (obj.name === 'wheel') {
+        this.wheelMeshes.push({ mesh: obj, radiusFt: obj.userData.wheelRadiusFt as number });
+      }
+    };
+    this.buggyMesh.traverse(prepareMesh);
+    this.striperMesh.traverse(prepareMesh);
     this.scene.add(this.buggyMesh);
     this.scene.add(this.striperMesh);
     const marker = this.striperMesh.getObjectByName('nozzle');
@@ -214,6 +218,18 @@ export class JobSiteScene {
     this.hitchBar.rotation.y = Math.atan2(dx, dz);
   }
 
+  /** Rolls each wheel mesh around its own axle by arc length / radius —
+   * all wheels share the rig's one system speed (the same simplification
+   * tire contamination already makes), not an independent per-wheel speed
+   * from turning. Close enough at this rig's turn rate to read as rolling,
+   * not worth a real differential for a low-poly arcade game. */
+  private spinWheels(dt: number): void {
+    const deltaDistanceFt = this.rig.speedFtPerSec * dt;
+    for (const { mesh, radiusFt } of this.wheelMeshes) {
+      mesh.rotation.x += deltaDistanceFt / radiusFt;
+    }
+  }
+
   update(dt: number, input: JobSiteInputState): void {
     this.elapsedSec += dt;
     const throttle = (input.forward ? 1 : 0) - (input.back ? 1 : 0);
@@ -222,6 +238,7 @@ export class JobSiteScene {
 
     this.rig = stepRig(this.rig, rigInput, dt);
     this.syncMeshesToRig();
+    this.spinWheels(dt);
 
     if (this.rig.locked !== this.wasLocked) {
       if (this.rig.locked) this.audio.playLockClick();
