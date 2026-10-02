@@ -1,8 +1,10 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { JobDef } from '../../core/jobs.ts';
 import { generateStallLines, lotFootprint } from '../../core/layout.ts';
 import { CoverageTracker } from '../../core/paintTracking.ts';
 import { WetPaintField } from '../../core/paintDrying.ts';
+import { createPerfectStreakState, updatePerfectStreak, type PerfectStreakState } from '../../core/perfectStreak.ts';
 import {
   createInitialRigState,
   hitchPivotPosition,
@@ -26,7 +28,7 @@ import { RibbonTrail } from './paintRibbon.ts';
 import { RigAudio } from '../audio/rigAudio.ts';
 
 const PAINT_COLOR = '#f5f3ee';
-const ASPHALT_COLOR = '#3a3b3d';
+const ASPHALT_COLOR = '#121314';
 // Depth order (low to high): ground(0) < tire tracks < main stripe < reference lines.
 // Tracks sit "on" the asphalt; the stripe reads as fresher/on top where they
 // overlap; reference lines stay visible as a guide over painted stripe.
@@ -67,17 +69,47 @@ export class JobSiteScene {
   private readonly audio: RigAudio;
   private wasLocked: boolean;
   private wasSpraying = false;
+  private perfectStreak: PerfectStreakState = createPerfectStreakState();
+  private perfectTriggered = false;
 
-  constructor(job: JobDef, aspect: number) {
+  constructor(job: JobDef, aspect: number, renderer: THREE.WebGLRenderer) {
     const footprint = lotFootprint(job.lot);
     this.groundWidthFt = footprint.widthFt + GROUND_MARGIN_FT * 2;
     this.groundDepthFt = footprint.depthFt + GROUND_MARGIN_FT * 2;
 
     this.scene.background = new THREE.Color(0x87ceeb);
     this.scene.fog = new THREE.Fog(0x87ceeb, 60, 220);
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-    const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-    sun.position.set(40, 60, 20);
+    // Gives metal materials (the nozzle's chrome gun housing) something to
+    // reflect — without this a metalness:1 material has no incoming light
+    // to bounce toward the camera and just looks flat/dark.
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    this.scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmremGenerator.dispose();
+    // Shadow darkness is purely a function of ambient (fill) light vs.
+    // direct light — a shadow only blocks the directional contribution, so
+    // ambient is kept low and the sun bumped up to compensate for overall
+    // brightness, rather than lowering both (which would just dim
+    // everything, not darken shadows specifically).
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.18));
+    const lotCenterX = footprint.widthFt / 2;
+    const lotCenterZ = footprint.depthFt / 2;
+    const sun = new THREE.DirectionalLight(0xffffff, 1.35);
+    sun.position.set(lotCenterX + 40, 60, lotCenterZ + 20);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    // Sized off the ground plane (not just the lot) so the shadow camera
+    // covers everywhere the rig can actually drive, including the margin
+    // it starts in before entering the lot.
+    const shadowExtentFt = Math.max(this.groundWidthFt, this.groundDepthFt) / 2 + 10;
+    sun.shadow.camera.left = -shadowExtentFt;
+    sun.shadow.camera.right = shadowExtentFt;
+    sun.shadow.camera.top = shadowExtentFt;
+    sun.shadow.camera.bottom = -shadowExtentFt;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 200;
+    sun.shadow.bias = -0.0015;
+    sun.target.position.set(lotCenterX, 0, lotCenterZ);
+    this.scene.add(sun.target);
     this.scene.add(sun);
 
     const ground = new THREE.Mesh(
@@ -86,6 +118,7 @@ export class JobSiteScene {
     );
     ground.rotation.x = -Math.PI / 2;
     ground.position.set(footprint.widthFt / 2, 0, footprint.depthFt / 2);
+    ground.receiveShadow = true;
     this.scene.add(ground);
 
     this.stripeRibbon = new RibbonTrail(PAINT_COLOR, RIG_SPEC.stripeLineWidthFt, STRIPE_HEIGHT_Y);
@@ -106,6 +139,12 @@ export class JobSiteScene {
 
     this.buggyMesh = buildBuggyMesh();
     this.striperMesh = buildStriperMesh();
+    this.buggyMesh.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) obj.castShadow = true;
+    });
+    this.striperMesh.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) obj.castShadow = true;
+    });
     this.scene.add(this.buggyMesh);
     this.scene.add(this.striperMesh);
     const marker = this.striperMesh.getObjectByName('nozzle');
@@ -118,6 +157,7 @@ export class JobSiteScene {
     const hitchBarGeometry = new THREE.CylinderGeometry(0.05, 0.05, RIG_SPEC.frameLengthFt, 6);
     hitchBarGeometry.rotateX(Math.PI / 2); // axis -> local Z, matching the heading convention
     this.hitchBar = new THREE.Mesh(hitchBarGeometry, new THREE.MeshStandardMaterial({ color: 0xb9c2cc }));
+    this.hitchBar.castShadow = true;
     this.scene.add(this.hitchBar);
 
     const startX = footprint.widthFt / 2;
@@ -199,10 +239,24 @@ export class JobSiteScene {
     if (this.rig.nozzleOn) {
       const nozzlePos = nozzleWorldPosition(this.rig);
       this.stripeRibbon.extendTo(nozzlePos.x, nozzlePos.z);
-      this.coverage.recordSpray(nozzlePos.x, nozzlePos.z);
+      const sprayResult = this.coverage.recordSpray(nozzlePos.x, nozzlePos.z);
       this.wetPaint.recordPaint(nozzlePos.x, nozzlePos.z, this.elapsedSec);
+
+      this.audio.setProgressTone(sprayResult.newlyCovered > 0, this.coverage.completionFraction());
+      const streakResult = updatePerfectStreak(
+        this.perfectStreak,
+        sprayResult.newlyCovered,
+        sprayResult.lineDistanceFt,
+      );
+      this.perfectStreak = streakResult.state;
+      if (streakResult.triggered) {
+        this.perfectTriggered = true;
+        this.audio.playPerfectChime();
+      }
     } else {
       this.stripeRibbon.breakStroke();
+      this.audio.setProgressTone(false, this.coverage.completionFraction());
+      this.perfectStreak = createPerfectStreakState();
     }
 
     this.wetPaint.prune(this.elapsedSec);
@@ -248,6 +302,18 @@ export class JobSiteScene {
 
   completionFraction(): number {
     return this.coverage.completionFraction();
+  }
+
+  isLocked(): boolean {
+    return this.rig.locked;
+  }
+
+  /** Polled once per frame by main.ts. Returns true (and clears the flag)
+   * exactly once per completed precision streak — see perfectStreak.ts. */
+  consumePerfectTrigger(): boolean {
+    const triggered = this.perfectTriggered;
+    this.perfectTriggered = false;
+    return triggered;
   }
 
   setAspect(aspect: number): void {

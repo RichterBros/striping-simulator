@@ -10,6 +10,7 @@ const BUGGY_COLOR = 0x1c3f94;
 const STRIPER_COLOR = 0x1c3f94;
 const WHEEL_COLOR = 0x111111;
 const METAL_COLOR = 0xb9c2cc;
+const CHROME_COLOR = 0xf2f4f6;
 
 function wheel(radius: number, width: number): THREE.Mesh {
   const geo = new THREE.CylinderGeometry(radius, radius, width, 16);
@@ -174,7 +175,10 @@ function buildNozzleArmAssembly(): THREE.Group {
 
   const gunHousing = new THREE.Mesh(
     new THREE.BoxGeometry(0.28, 0.22, 0.4),
-    new THREE.MeshStandardMaterial({ color: 0x222222 }),
+    // Fully metallic + near-zero roughness so it reads as polished chrome —
+    // relies on JobSiteScene setting scene.environment, since a metal
+    // material with no environment map to reflect just looks flat/dark.
+    new THREE.MeshStandardMaterial({ color: CHROME_COLOR, metalness: 1, roughness: 0.08 }),
   );
   gunHousing.position.set(0, gunHeight - barHeight, length);
   assembly.add(gunHousing);

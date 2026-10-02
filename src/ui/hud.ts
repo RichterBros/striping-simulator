@@ -16,11 +16,14 @@ export class Hud {
   readonly root: HTMLDivElement;
   private readonly instructions: HTMLDivElement;
   private readonly startButton: HTMLButtonElement;
-  private readonly completionWrap: HTMLDivElement;
-  private readonly completionBar: HTMLDivElement;
-  private readonly completionLabel: HTMLDivElement;
   private readonly controlsPanel: HTMLDivElement;
+  private readonly scorePanel: HTMLDivElement;
+  private readonly scorePercent: HTMLDivElement;
+  private readonly scoreBar: HTMLDivElement;
+  private readonly perfectPopup: HTMLDivElement;
+  private readonly lockBadge: HTMLDivElement;
   private onStartJob: (() => void) | null = null;
+  private lastShownPct = -1;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
@@ -43,18 +46,26 @@ export class Hud {
     this.startButton.addEventListener('click', () => this.onStartJob?.());
     this.root.appendChild(this.startButton);
 
-    this.completionWrap = document.createElement('div');
-    this.completionWrap.className = 'hud-completion';
-    this.completionLabel = document.createElement('div');
-    this.completionLabel.className = 'hud-completion-label';
-    this.completionBar = document.createElement('div');
-    this.completionBar.className = 'hud-completion-bar';
-    const fill = document.createElement('div');
-    fill.className = 'hud-completion-fill';
-    this.completionBar.appendChild(fill);
-    this.completionWrap.appendChild(this.completionLabel);
-    this.completionWrap.appendChild(this.completionBar);
-    this.root.appendChild(this.completionWrap);
+    // Big arcade-style score readout, top-right — independently positioned
+    // (not part of the left-aligned flex stack above) same way the
+    // controls panel already escapes it.
+    this.scorePanel = document.createElement('div');
+    this.scorePanel.className = 'hud-score-panel';
+    const scoreLabel = document.createElement('div');
+    scoreLabel.className = 'hud-score-label';
+    scoreLabel.textContent = 'STRIPING COMPLETE';
+    this.scorePercent = document.createElement('div');
+    this.scorePercent.className = 'hud-score-percent';
+    this.scorePercent.textContent = '0%';
+    this.scoreBar = document.createElement('div');
+    this.scoreBar.className = 'hud-score-bar';
+    const scoreBarFill = document.createElement('div');
+    scoreBarFill.className = 'hud-score-bar-fill';
+    this.scoreBar.appendChild(scoreBarFill);
+    this.scorePanel.appendChild(scoreLabel);
+    this.scorePanel.appendChild(this.scorePercent);
+    this.scorePanel.appendChild(this.scoreBar);
+    this.root.appendChild(this.scorePanel);
 
     this.controlsPanel = document.createElement('div');
     this.controlsPanel.className = 'hud-controls-panel';
@@ -68,6 +79,28 @@ export class Hud {
     this.controlsPanel.appendChild(controlsBody);
     this.root.appendChild(this.controlsPanel);
 
+    // Center-screen "PERFECT!" celebration — independent of the rest of the
+    // HUD, triggered transiently via flashPerfect() rather than shown/hidden
+    // through setPhase like everything else here.
+    this.perfectPopup = document.createElement('div');
+    this.perfectPopup.className = 'hud-perfect-popup';
+    this.perfectPopup.textContent = 'PERFECT!';
+    this.root.appendChild(this.perfectPopup);
+
+    // Top-center badge that tracks the hitch lock state directly (unlike
+    // flashPerfect's one-shot animation, this just mirrors current state —
+    // visible exactly while locked, gone the instant it unlocks).
+    this.lockBadge = document.createElement('div');
+    this.lockBadge.className = 'hud-lock-badge';
+    const lockBadgeWheelLabel = document.createElement('div');
+    lockBadgeWheelLabel.className = 'hud-lock-badge-wheel-label';
+    lockBadgeWheelLabel.textContent = 'WHEEL';
+    this.lockBadge.appendChild(lockBadgeWheelLabel);
+    const lockBadgeText = document.createElement('div');
+    lockBadgeText.textContent = '\u{1F512} LOCKED';
+    this.lockBadge.appendChild(lockBadgeText);
+    this.root.appendChild(this.lockBadge);
+
     this.setPhase('yard');
   }
 
@@ -75,13 +108,14 @@ export class Hud {
     if (phase === 'yard') {
       this.instructions.textContent = 'Click equipment to load the truck, then press Start Job.';
       this.startButton.style.display = 'inline-block';
-      this.completionWrap.style.display = 'none';
+      this.scorePanel.style.display = 'none';
       this.controlsPanel.style.display = 'block';
+      this.lockBadge.classList.remove('visible');
     } else {
       this.instructions.textContent =
         'W/S: drive  A/D: steer (tap to nudge, hold to turn)  Q/E: nudge-rotate  SPACE: spray paint  — stripe the lot along the reference lines.';
       this.startButton.style.display = 'none';
-      this.completionWrap.style.display = 'block';
+      this.scorePanel.style.display = 'flex';
       this.controlsPanel.style.display = 'none';
     }
   }
@@ -96,8 +130,27 @@ export class Hud {
 
   setCompletion(fraction: number): void {
     const pct = Math.round(fraction * 100);
-    this.completionLabel.textContent = `Striping complete: ${pct}%`;
-    const fillEl = this.completionBar.firstElementChild as HTMLDivElement | null;
+    this.scorePercent.textContent = `${pct}%`;
+    const fillEl = this.scoreBar.firstElementChild as HTMLDivElement | null;
     if (fillEl) fillEl.style.width = `${pct}%`;
+
+    if (pct > this.lastShownPct) {
+      this.scorePercent.classList.remove('bump');
+      void this.scorePercent.offsetWidth; // force reflow so the animation restarts
+      this.scorePercent.classList.add('bump');
+    }
+    this.lastShownPct = pct;
+  }
+
+  /** Transient "PERFECT!" celebration — call once per precision streak. */
+  flashPerfect(): void {
+    this.perfectPopup.classList.remove('show');
+    void this.perfectPopup.offsetWidth; // force reflow so the animation restarts
+    this.perfectPopup.classList.add('show');
+  }
+
+  /** Mirrors the hitch lock state every frame — visible iff `locked`. */
+  setLocked(locked: boolean): void {
+    this.lockBadge.classList.toggle('visible', locked);
   }
 }

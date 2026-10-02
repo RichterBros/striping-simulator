@@ -325,7 +325,10 @@ striping-simulator/
   left/right respectively (no steering authority at a standstill — matches
   real towed-rig behavior; mind the heading-to-screen-direction sign when
   touching `stepRig`'s `headingDelta`, see the comment there),
-  `SPACE` sprays paint continuously while held.
+  `SPACE` sprays paint continuously while held. A "WHEEL / LOCKED" badge
+  (top-center) shows whenever the hitch is pinned straight and disappears
+  the instant a steering hold breaks it — see "Satisfying-feel feedback"
+  below.
 
 ## Mechanics notes / gotchas learned the hard way
 
@@ -523,6 +526,75 @@ striping-simulator/
     confirming the exact click counts (0 while straight, 1 unlock on
     turning, 1 lock on settling back).
 
+## Satisfying-feel feedback: progress tone, PERFECT popup, LOCKED badge, chrome nozzle
+
+Added in response to feedback that striping needed to feel more "ASMR,
+satisfying and arcadey" — a sense of accomplishment for nailing the line, not
+just a percentage ticking up silently.
+
+- **Rising-pitch "connection" tone while painting onto the reference line.**
+  `RigAudio.setProgressTone(active, completionFraction)` drives two oscillators
+  (a sine fundamental + a triangle a fifth above, both pre-created and started
+  once in `start()` — oscillators can't be restarted after `stop()`, so they're
+  modulated forever via `setTargetAtTime` rather than recreated). Frequency
+  rises from 320Hz to 1000Hz as `completionFraction` climbs toward 1 (the
+  whole-job percentage, not a per-stripe reset) and gain ramps to 0 the instant
+  `active` goes false. `active` is keyed off `CoverageTracker.recordSpray`'s
+  `newlyCovered > 0` — i.e. the tone only sounds while genuinely making new
+  progress, not just while the spacebar is held over already-painted ground.
+- **Big score panel, top-right (`hud-score-panel` in `hud.ts`/`style.css`).**
+  Replaced the old small inline completion text entirely. Large glowing
+  percentage (`hud-score-percent`) gets a quick scale-bump animation
+  (remove-class → force reflow via `offsetWidth` → re-add class, the same
+  restart trick used by `flashPerfect` below) every time the displayed
+  percentage increases, plus a progress bar underneath.
+- **"PERFECT!" popup (`CoverageTracker.recordSpray` → `perfectStreak.ts` →
+  `JobSiteScene.consumePerfectTrigger()` → `Hud.flashPerfect()`).**
+  `recordSpray` returns `{ newlyCovered, lineDistanceFt }` —
+  `lineDistanceFt` is the **perpendicular distance to the nearest required
+  line *segment*, not to a discrete sample dot.** This distinction mattered: an
+  earlier version measured distance to the nearest sample point, which is
+  bounded below by roughly half the sample spacing (~0.5ft at the default
+  1ft spacing) even when driving dead-on the line — so a tight precision
+  threshold (0.05ft) was nearly unreachable no matter how accurately the
+  player drove. Perpendicular-to-segment distance is unaffected by sample
+  spacing and actually measures what "nailing the line" means.
+  `perfectStreak.ts`'s `updatePerfectStreak` requires 5 **consecutive precise
+  new-coverage events** (`PERFECT_PRECISION_FT = 0.05`, `STREAK_LENGTH_NEEDED
+  = 5`) before triggering — deliberately not one celebration per precise hit,
+  which at 60fps while carefully tracking a line would spam constantly.
+  **Non-obvious subtlety:** "consecutive" does NOT mean every single
+  `recordSpray` call in a row — at 60fps, a given sample only crosses into
+  capture radius on one frame; every other frame along a dead-on pass has
+  `newlyCovered === 0` simply because there's nothing new left nearby to
+  cover, not because the player did anything wrong. So a frame with
+  `newlyCovered === 0` only breaks the streak if it's *also* off-line;
+  if still on-line it's neutral (preserves the streak without advancing it).
+  Getting this wrong (treating every zero-progress frame as a break) makes
+  the streak reset almost every tick and the popup effectively unreachable —
+  verified this exact failure mode via a live browser test before fixing it
+  (coverage climbed normally but the popup never once fired), then confirmed
+  the fix with an isolated Node test simulating continuous 60fps-granularity
+  spraying (not just one call per sample) — both the original
+  nearest-sample-distance bug and this consecutive-frames bug need a
+  continuous/high-frequency simulation to catch; a test that calls
+  `recordSpray` once per sample (matching sample spacing exactly) won't
+  reproduce either.
+- **LOCKED badge (`hud-lock-badge`, top-center).** Unlike `flashPerfect`'s
+  one-shot animation, this just mirrors `JobSiteScene.isLocked()` every frame
+  via `Hud.setLocked(boolean)` (same "poll a getter once per frame in
+  `main.ts`" pattern as `completionFraction`) — visible exactly while the
+  hitch is locked straight, gone the instant a steering hold breaks it. Shows
+  a small "WHEEL" label stacked above the lock text.
+- **Chrome nozzle.** The spray gun housing (`buildNozzleArmAssembly` in
+  `vehicleMesh.ts`) was flat near-black (`0x222222`, no metalness). Changed to
+  `metalness: 1, roughness: 0.08` with a light silver base color. A pure-metal
+  PBR material with nothing to reflect just looks flat and dark, so
+  `JobSiteScene`'s constructor now takes the `THREE.WebGLRenderer` and builds a
+  `scene.environment` via `PMREMGenerator` + three's `RoomEnvironment` addon
+  (`three/examples/jsm/environments/RoomEnvironment.js`) specifically so metal
+  surfaces have something to reflect.
+
 ## Future: drive-to-job-site phase (design notes only — not implemented)
 
 A third phase, between loading the truck in the yard and arriving at the job
@@ -570,6 +642,10 @@ it's ready to pick up later.
 - [x] **Wet paint + tire tracks.** ~5 minute dry time; driving a wheel
       through wet paint picks it up and leaves fading tire-track marks over
       the next ~20ft. See "Wet paint and tire tracks" above.
+- [x] **Satisfying-feel feedback pass.** Rising-pitch progress tone while
+      painting onto the reference line, big glowing score panel, "PERFECT!"
+      popup for precise line-tracking streaks, LOCKED hitch badge, chrome
+      nozzle. See "Satisfying-feel feedback" above.
 - [ ] **Tire-track score deduction + cleanup.** Deduct score for tracked-up
       asphalt until the player repaints the contaminated area with black
       paint. Explicitly deferred (not forgotten) — see the "Not yet

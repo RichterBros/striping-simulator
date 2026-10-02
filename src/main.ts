@@ -16,6 +16,8 @@ if (!app) throw new Error('#app root element missing');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 app.appendChild(renderer.domElement);
 
 const hud = new Hud(app);
@@ -43,7 +45,7 @@ hud.setOnStartJob(() => {
   if (phase !== 'yard') return;
   phase = 'jobsite';
   yardScene = null;
-  jobSiteScene = new JobSiteScene(jobs[0], currentAspect());
+  jobSiteScene = new JobSiteScene(jobs[0], currentAspect(), renderer);
   hud.setPhase('jobsite');
 });
 
@@ -124,6 +126,8 @@ function tick(now: number): void {
   } else if (phase === 'jobsite' && jobSiteScene) {
     jobSiteScene.update(dt, input);
     hud.setCompletion(jobSiteScene.completionFraction());
+    hud.setLocked(jobSiteScene.isLocked());
+    if (jobSiteScene.consumePerfectTrigger()) hud.flashPerfect();
     renderer.render(jobSiteScene.scene, jobSiteScene.camera);
   }
 

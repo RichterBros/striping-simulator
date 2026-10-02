@@ -12,6 +12,8 @@ interface PropEntry {
 
 const YARD_DEPTH_FT = 40;
 const GROUND_SIZE_FT = 160; // generously larger than any realistic viewport extent
+const PROP_COLOR = 0xf2f2f2;
+const VEHICLE_PROP_COLOR = 0x1c3f94;
 
 export class YardScene {
   readonly scene = new THREE.Scene();
@@ -63,7 +65,12 @@ export class YardScene {
     this.scene.add(cab);
   }
 
-  private buildEquipmentProps(defs: EquipmentDef[]): void {
+  private buildEquipmentProps(allDefs: EquipmentDef[]): void {
+    // Only the job's required equipment is shown for now — the rest
+    // (yellow paint, cones, measuring wheel, stencil kit) isn't wired into
+    // any gameplay yet, so showing it alongside the two real items is just
+    // visual noise.
+    const defs = allDefs.filter((d) => d.required);
     const spacing = 6;
     const startX = -spacing * ((defs.length - 1) / 2);
 
@@ -79,20 +86,23 @@ export class YardScene {
   }
 
   private buildPropMesh(def: EquipmentDef): THREE.Mesh {
+    // The vehicle keeps a real, meaningful color (matches the striper/buggy
+    // mesh blue used on site) since it's the one prop whose identity
+    // actually matters. The rest don't have a gameplay-tied color yet
+    // (e.g. yellow paint isn't a selectable paint color), so stay the one
+    // placeholder white until that's real.
     let geometry: THREE.BufferGeometry;
-    let color = 0xcccccc;
+    let color = PROP_COLOR;
     switch (def.category) {
       case 'vehicle':
         geometry = new THREE.BoxGeometry(2.2, 1.2, 4.5);
-        color = 0x1c3f94;
+        color = VEHICLE_PROP_COLOR;
         break;
       case 'consumable':
         geometry = new THREE.CylinderGeometry(0.8, 0.8, 1.4, 16);
-        color = def.id === 'paint-yellow' ? 0xe8c400 : 0xf2f2f2;
         break;
       default:
         geometry = new THREE.ConeGeometry(0.7, 1.4, 12);
-        color = 0xe8622a;
     }
     const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color }));
     return mesh;

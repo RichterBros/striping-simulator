@@ -27,6 +27,18 @@ export class RigAudio {
   private spraySource: AudioBufferSourceNode | null = null;
   private started = false;
 
+  // "Making a connection" tone: a continuously-running pair of oscillators
+  // (root + a fifth above, for a fuller chime rather than a bare sine)
+  // whose shared gain fades in only while actively gaining new coverage,
+  // and whose pitch rises with overall job completion — see
+  // setProgressTone(). Runs the whole job site phase at gain 0 when idle,
+  // same "start once, just modulate gain/frequency" pattern as the old
+  // synthesized engine sound, since oscillators can't be restarted once
+  // stopped.
+  private readonly progressOsc: OscillatorNode;
+  private readonly progressOsc2: OscillatorNode;
+  private readonly progressGain: GainNode;
+
   constructor() {
     this.ctx = new AudioContext();
     void this.ctx.resume();
@@ -38,16 +50,35 @@ export class RigAudio {
     this.sprayGain = this.ctx.createGain();
     this.sprayGain.gain.value = 0.7;
     this.sprayGain.connect(this.ctx.destination);
+
+    this.progressGain = this.ctx.createGain();
+    this.progressGain.gain.value = 0;
+    this.progressGain.connect(this.ctx.destination);
+
+    this.progressOsc = this.ctx.createOscillator();
+    this.progressOsc.type = 'sine';
+    this.progressOsc.frequency.value = 320;
+    this.progressOsc.connect(this.progressGain);
+
+    this.progressOsc2 = this.ctx.createOscillator();
+    this.progressOsc2.type = 'triangle';
+    this.progressOsc2.frequency.value = 320 * 1.5; // perfect fifth above, for shimmer
+    const progressOsc2Gain = this.ctx.createGain();
+    progressOsc2Gain.gain.value = 0.35; // quieter than the root tone
+    this.progressOsc2.connect(progressOsc2Gain).connect(this.progressGain);
   }
 
   /** Call once, after the AudioContext is allowed to play (see class doc).
    * Kicks off loading both samples; the engine loop starts playing as soon
    * as it's ready, the spray loop just gets preloaded and sits ready for
    * `startSpray()`/`stopSpray()` — preloading here rather than on first
-   * spray avoids a delay on the player's very first press of Space. */
+   * spray avoids a delay on the player's very first press of Space. Also
+   * starts the (silent until needed) progress-tone oscillators. */
   start(): void {
     if (this.started) return;
     this.started = true;
+    this.progressOsc.start();
+    this.progressOsc2.start();
     void this.loadAndLoopEngine();
     void this.loadSprayBuffer();
   }
@@ -114,6 +145,47 @@ export class RigAudio {
     this.spraySource.stop();
     this.spraySource.disconnect();
     this.spraySource = null;
+  }
+
+  /** Call every frame while spraying with whether this frame's spray point
+   * just covered new ground (not just "is spraying" — this should only
+   * sound while genuinely making progress, not while idling on
+   * already-painted asphalt) and the overall completion fraction (0..1).
+   * Fades in fast / out slower, and the pitch climbs as the job nears
+   * completion — "building anticipation" toward finishing. Call with
+   * `active: false` when the nozzle is off entirely. */
+  setProgressTone(active: boolean, completionFraction: number): void {
+    const now = this.ctx.currentTime;
+    const minFreq = 320;
+    const maxFreq = 1000;
+    const targetFreq = minFreq + completionFraction * (maxFreq - minFreq);
+    this.progressOsc.frequency.setTargetAtTime(targetFreq, now, 0.08);
+    this.progressOsc2.frequency.setTargetAtTime(targetFreq * 1.5, now, 0.08);
+    const targetGain = active ? 0.12 : 0;
+    this.progressGain.gain.setTargetAtTime(targetGain, now, active ? 0.05 : 0.2);
+  }
+
+  /** Short ascending three-note chime for the "PERFECT!" precision
+   * celebration — distinct from the continuous progress tone above (this
+   * is a one-shot reward sting, not a continuous feedback signal). */
+  playPerfectChime(): void {
+    const now = this.ctx.currentTime;
+    const notesHz = [660, 880, 1320]; // a bright major-ish triad, ascending
+    notesHz.forEach((freq, i) => {
+      const startAt = now + i * 0.07;
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0, startAt);
+      gain.gain.linearRampToValueAtTime(0.25, startAt + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.3);
+
+      osc.connect(gain).connect(this.ctx.destination);
+      osc.start(startAt);
+      osc.stop(startAt + 0.32);
+    });
   }
 
   /** Short mechanical click, played once per transition. Lock and unlock
